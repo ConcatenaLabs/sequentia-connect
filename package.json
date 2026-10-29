@@ -1,0 +1,10 @@
+{
+  "name": "sequentia-connect",
+  "version": "0.1.0",
+  "description": "Connects your own Sequentia Core wallet, Lightning node and leaf wallet to the websites you allow, with every signature approved in your terminal",
+  "type": "module",
+  "bin": { "sequentia-connect": "bin/sequentia-connect.mjs" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "engines": { "node": ">=20" },
+  "license": "MIT"
+}

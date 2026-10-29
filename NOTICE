@@ -1,0 +1,5 @@
+Third-party components bundled in this repository keep their own terms.
+
+vendor/btc.js and vendor/noble-ciphers.js are bundles of @noble/curves,
+@noble/hashes, @noble/ciphers, @scure/base and @scure/btc-signer (MIT,
+Paul Miller), as the Sequentia browser extension carries them.
