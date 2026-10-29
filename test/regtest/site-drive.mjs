@@ -179,7 +179,7 @@ async function main() {
   await a.eval("document.getElementById('btnConnect').click()");
   await sleep(500);
   const menu = await a.eval("document.getElementById('connectMenu').innerText");
-  ok(/Sequentia wallet extension\s+Not installed/.test(menu) && /Sequentia Core on this computer\s+Ready/.test(menu), 'the chooser lists both wallets: ' + menu.replace(/\s+/g, ' '));
+  ok(/Ambra browser\s+Not installed/.test(menu) && /Sequentia Core on this computer\s+Ready/.test(menu), 'the chooser lists both wallets: ' + menu.replace(/\s+/g, ' '));
   await a.shot('01-chooser.png');
   await a.eval("document.querySelector('[data-connector=local]').click()");
   await A.answer('A site asks to connect', [new RegExp('from ' + ORIGIN.replace(/[.:/]/g, '\\$&')), /It will see: ert1q/], true);
