@@ -46,7 +46,10 @@ real credentials never appear on a command line. What a limit order does not fil
 rests on the book as a covenant order funded from your Core wallet: what it is paid
 goes to a taproot address of that wallet, so resting an order needs a descriptor
 wallet (`createwallet` with `descriptors=true`). The daemon lists it on the relay
-once its funding is in a block. Every fee is paid in the asset you give. The key
+once its funding is in a block. Every fee is paid in the asset you give. A limit
+order takes the provider protocol's options, listed in `getCapabilities`: post only
+(refused if it would take an order now), `rest: false` (nothing rests), a smallest
+fill, and a take-back time from an hour to a week (a day without one). The key
 that signs an order's listing and the key that alone can take it back after its
 time are drawn from `maker.seed` in the daemon's directory; keep that file as you
 keep a wallet backup.
@@ -154,8 +157,10 @@ sites already use, so a site supports it by adding a connector, not a code path.
 runs the daemon's doors and approvals with a stand-in stack. Against real parts:
 
 - `test/regtest/site-drive.mjs`: the SeqDEX site in headless Chromium trading through
-  two daemons and two Core wallets on a private anchored chain (a limit order placed
-  and part of it taken, one approval refused with nothing moved, the doors refused).
+  two daemons and two Core wallets on a private anchored chain (a post-only limit
+  order with a smallest fill and a one-hour take-back placed and part of it taken, a
+  post-only order that would trade refused, one approval refused with nothing moved,
+  the doors refused).
   It uses the chain and the stand-in box of the extension's market harness; its header
   lists what it needs.
 - `test/seqln/test_connect_lightning.py`: channels, an invoice received and an

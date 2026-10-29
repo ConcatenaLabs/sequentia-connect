@@ -11,6 +11,7 @@ import { amountToAtoms } from './rpc.mjs';
 import { market as makeMarket } from './market.mjs';
 import { Rejected } from './approve.mjs';
 import { PROVIDER } from './server.mjs';
+import { ORDER_FEATURES } from '../vendor/market-plan.js';
 
 const SILENT_NO_SESSION = new Set(['getCapabilities', 'getNetwork', 'getWalletMode', 'getAccounts', 'connect']);
 const notConnected = () => Object.assign(new Error('this site is not connected; call connect first'), { code: 'no_session' });
@@ -99,6 +100,7 @@ export function makeStack({ cfg, core, bitcoin, lightning, leaves, approver, dat
   const handlers = {
     getCapabilities: async () => ({ provider: PROVIDER, version, network: (await chainInfo().catch(() => ({ network: null }))).network, methods, features: [
       ...(core ? ['sequentia-core'] : []), ...(bitcoin ? ['bitcoin-core'] : []), ...lightning.map((l) => 'lightning-' + l.chain), ...(leaves ? ['leaves'] : []),
+      ...(mkt ? ORDER_FEATURES : []),
     ], events: ['accountsChanged', 'disconnect', 'modeChanged'] }),
     getNetwork: () => chainInfo(),
     getWalletMode: async () => ({ mode }),

@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { planTrade, restTerms, orderProgress, MAX_ORDERS_PER_TRADE } from '../vendor/market-plan.js';
+import { planTrade, restTerms, orderProgress, readOrderOptions, withMinFill, MAX_ORDERS_PER_TRADE } from '../vendor/market-plan.js';
 import { planPlaceOrder, postExisting } from '../vendor/covenant-order.js';
 import { orderExpiryTime, lockState } from '../vendor/covenant-flow.js';
 import { secp256k1, schnorr } from '../vendor/btc.js';
@@ -136,6 +136,8 @@ export function market({ core, relay, seqobCli, datadir, meta, log = () => {} })
     const { type, base, quote, side } = params || {};
     if (type !== 'market' && type !== 'limit') throw new Error("type must be 'market' or 'limit'");
     if (side !== 'buy' && side !== 'sell') throw new Error("side must be 'buy' or 'sell'");
+    // A limit order's options (vendor/market-plan.js): post only, rest: false, min_fill, take_back_after.
+    const opts = readOrderOptions(params, type);
     if (quote === 'BTC' || base === 'BTC') throw new Error('a trade against BTC settles over Lightning, which this connector does not trade on yet; nothing moved');
     if (!isHex64(base) || !isHex64(quote) || base === quote) throw new Error('base and quote must be two different 64-hex asset ids');
     const amount = big(params.amount);
@@ -146,7 +148,13 @@ export function market({ core, relay, seqobCli, datadir, meta, log = () => {} })
     const offers = await offersOf(base, quote);
     const plan = planTrade({ offers, base, quote, side, amount, price, basePrecision: bp, nowSec: Math.floor(Date.now() / 1000) });
     if (type === 'market' && !plan.slices.length) throw new Error('nothing on the book can be traded at this market right now');
-    const rest = type === 'limit' && plan.baseLeft > 0n ? restTerms({ base, quote, side, baseLeft: plan.baseLeft, price, basePrecision: bp }) : null;
+    if (opts.postOnly && plan.slices.length) throw new Error('this order would trade at once; nothing was placed');
+    if (type === 'limit' && !opts.rest && !plan.slices.length) throw new Error('nothing on the book reaches this price right now; nothing was placed');
+    const rest = type === 'limit' && opts.rest && plan.baseLeft > 0n
+      ? withMinFill(restTerms({ base, quote, side, baseLeft: plan.baseLeft, price, basePrecision: bp }), opts.minFill, { side, price, basePrecision: bp })
+      : null;
+    const restSecs = opts.takeBackAfter || ORDER_SECONDS;
+    const restsFor = restSecs < 2 * 86400 ? Math.round(restSecs / 3600) + ' hour' : Math.round(restSecs / 86400) + ' day';
     const payAsset = plan.pay;
     const fillFee = await feeIn(payAsset, FILL_VSIZE);
     const restFee = rest ? await feeIn(rest.sell, FUND_VSIZE) : 0n;
@@ -165,10 +173,11 @@ export function market({ core, relay, seqobCli, datadir, meta, log = () => {} })
       ...(plan.slices.length ? [`Takes ${plan.slices.length} order${plan.slices.length > 1 ? 's' : ''} on the book now:`, `  You give: ${f(plan.pay, plan.gave)} ${t(plan.pay)}`, `  You get:  ${f(plan.receive, plan.got)} ${t(plan.receive)}`,
         `  Fees:     ${f(payAsset, fillFee * BigInt(plan.slices.length))} ${t(payAsset)} (one transaction per order)`] : ['Takes nothing on the book now.']),
       ...(rest ? [`Rests on the book: sells ${f(rest.sell, rest.sellAtoms)} ${t(rest.sell)} for ${f(rest.want, rest.wantAtoms)} ${t(rest.want)}, funded now (fee ${f(rest.sell, restFee)} ${t(rest.sell)}),`,
-        `  filled by anyone at your price; what is left can be taken back after ${ORDER_SECONDS / 3600} hours`] : []),
+        ...(opts.minFill != null ? [`  smallest fill ${f(rest.sell, rest.minLot)} ${t(rest.sell)}`] : []),
+        `  filled by anyone at your price; what is left can be taken back after ${restsFor}${restsFor.startsWith('1 ') ? '' : 's'}`] : []),
       ...(type === 'market' && plan.baseLeft > 0n ? [`The book holds only ${f(base, plan.baseDone)} ${t(base)} near the best price; the rest is not traded`] : []),
     ];
-    return { plan, rest, payAsset, fillFee, restFee, lines, base, quote, side, type, price, amount };
+    return { plan, rest, payAsset, fillFee, restFee, lines, base, quote, side, type, price, amount, opts };
   }
 
   async function placeRest(p, origin) {
@@ -185,7 +194,7 @@ export function market({ core, relay, seqobCli, datadir, meta, log = () => {} })
     if (Number(info.witness_version) !== 1 || !isHex64(info.witness_program)) throw new Error('the Core wallet gave no taproot address for the order\'s credits');
     const refundPriv = keyOf('refund', id);
     const makerX = hex(schnorr.getPublicKey(refundPriv));
-    const expiry = orderExpiryTime(await tipMedianTime(), ORDER_SECONDS);
+    const expiry = orderExpiryTime(await tipMedianTime(), (p.opts && p.opts.takeBackAfter) || ORDER_SECONDS);
     const plan = planPlaceOrder({
       assetA: rev(rest.sell), assetB: rev(rest.want), sellAtoms: rest.sellAtoms, rateNum: rest.rateNum, rateDen: rest.rateDen, minLot: rest.minLot,
       expiryLocktime: expiry, makerProg: info.witness_program, makerX,

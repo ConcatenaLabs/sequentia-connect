@@ -198,6 +198,45 @@ export function planTrade({ offers, base, quote, side, amount, price = null, bas
 // wanted; selling, it sells the base still offered. The rate comes from the price, so
 // the numbers in the covenant stay small. Returns { sell, want, sellAtoms, wantAtoms,
 // rateNum, rateDen, minLot } or null when nothing is left to rest.
+// A limit order's options (the provider protocol's `placeOrder`): post only, `rest: false`,
+// `min_fill` (base atoms) and `take_back_after` (seconds from now, an hour to a week). The
+// web wallet's site-orders.js reads the same options for user mode, with the same refusals.
+export const TAKE_BACK_MIN = 3600;
+export const TAKE_BACK_MAX = 7 * 86400;
+export const ORDER_FEATURES = Object.freeze(['order-post-only', 'order-no-rest', 'order-min-fill', 'order-take-back-after']);
+export function readOrderOptions(p, type) {
+  const has = (k) => p && p[k] !== undefined && p[k] !== null;
+  const asked = ['post_only', 'rest', 'min_fill', 'take_back_after'].filter(has);
+  if (asked.length && type !== 'limit') throw new Error(asked.join(', ') + ': options of a limit order');
+  if (has('post_only') && typeof p.post_only !== 'boolean') throw new Error('post_only must be true or false');
+  if (has('rest') && typeof p.rest !== 'boolean') throw new Error('rest must be true or false');
+  const postOnly = p ? p.post_only === true : false;
+  const rest = !(p && p.rest === false);
+  if (postOnly && !rest) throw new Error('post_only and rest: false cannot be asked together: one only rests, the other never does');
+  let minFill = null;
+  if (has('min_fill')) {
+    if (!/^\d+$/.test(String(p.min_fill)) || big(p.min_fill) <= 0n) throw new Error('min_fill must be a positive number of base atoms');
+    minFill = big(p.min_fill);
+  }
+  let takeBackAfter = null;
+  if (has('take_back_after')) {
+    const s = Number(p.take_back_after);
+    if (!Number.isInteger(s) || s < TAKE_BACK_MIN || s > TAKE_BACK_MAX) throw new Error(`take_back_after must be whole seconds from ${TAKE_BACK_MIN} (an hour) to ${TAKE_BACK_MAX} (a week)`);
+    takeBackAfter = s;
+  }
+  return { postOnly, rest, minFill, takeBackAfter };
+}
+
+// The resting order with its smallest lot from `min_fill` (base atoms): as is for a sale, at
+// the price for a purchase (rounded up, in the quote it sells). Unchanged without one.
+export function withMinFill(rest, minFill, { side, price, basePrecision }) {
+  if (!rest || minFill == null) return rest;
+  const unit = 10n ** BigInt(basePrecision);
+  const lot = side === 'sell' ? big(minFill) : (big(minFill) * big(price) + unit - 1n) / unit;
+  if (lot > rest.sellAtoms) throw new Error('the smallest fill is more than the order; nothing was placed');
+  return { ...rest, minLot: lot > 0n ? lot : 1n };
+}
+
 export function restTerms({ base, quote, side, baseLeft, price, basePrecision }) {
   const left = big(baseLeft), p = big(price);
   if (left <= 0n) return null;
