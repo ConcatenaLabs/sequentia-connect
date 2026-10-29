@@ -5,7 +5,7 @@ Lightning node (SeqLN, or Core Lightning on Bitcoin), and the `arca` leaf wallet
 with every signature and payment approved by you in the terminal where the daemon
 runs. Sequentia is a Bitcoin sidechain for asset tokenization and disintermediated
 exchanges; the SeqDEX site (https://sequentiatestnet.com/dex/) connects to this
-daemon as it connects to the Sequentia browser extension.
+daemon as it connects to Ambra browser, the browser extension.
 
 The daemon speaks the Sequentia website provider protocol, the same one the
 extension speaks
