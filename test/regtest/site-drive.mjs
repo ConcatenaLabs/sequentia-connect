@@ -1,8 +1,10 @@
 // The SeqDEX site trading through sequentia-connect on a private chain.
 //
 // Two people, each with a wallet in one Sequentia Core node and a sequentia-connect of
-// their own, each in a headless Chromium on the SeqDEX site. Alice places a limit sell
-// that rests on the book; Bob takes part of it with a market buy. Every approval is
+// their own, each in a headless Chromium on the SeqDEX site's market page. Alice places a
+// post-only limit sell with a smallest fill and a one-hour take-back, which rests on the
+// book; Bob's post-only buy at her price is refused, then he takes part of her order with
+// a market buy. Every approval is
 // answered in the daemon's terminal (its standard input), after the drive has read what
 // the terminal shows; one is refused, and nothing moves for it. Then the daemon's doors:
 // another origin, a rebinding host name, no session.
@@ -105,6 +107,8 @@ async function daemon(name, cfg) {
   const d = {
     name, pid: p.pid, port: cfg.listen,
     term: () => term,
+    // How many questions the terminal has asked since the last one answered.
+    asked: () => (term.slice(d.mark ?? 0).match(/Approve\? Type yes or no/g) || []).length,
     // Waits for the next approval the terminal shows, checks its words, answers it.
     async answer(title, expect, yes) {
       const from = d.mark ?? 0;
@@ -172,28 +176,33 @@ async function main() {
   ok(pna.status === 204 && pna.headers.get('access-control-allow-private-network') === 'true', 'the private network preflight is answered yes for an allowed origin');
 
   // ---- Alice: connect through the chooser, place a limit sell ----
-  const pageUrl = (d) => `${ORIGIN}/dex/index.html?pair=XTEST-YUSD&local=${d.port}`;
+  const pageUrl = (d) => `${ORIGIN}/dex/market.html?pair=XTEST-YUSD&local=${d.port}`;
   const a = await browser('alice');
   await a.go(pageUrl(A));
   await until('the site reads the daemon', async () => (await a.eval("document.getElementById('btnConnect').textContent")).includes('Connect wallet'), 30_000);
   await a.eval("document.getElementById('btnConnect').click()");
   await sleep(500);
   const menu = await a.eval("document.getElementById('connectMenu').innerText");
-  ok(/Ambra browser\s+Not installed/.test(menu) && /Sequentia Core on this computer\s+Ready/.test(menu), 'the chooser lists both wallets: ' + menu.replace(/\s+/g, ' '));
+  ok(/Ambra browser\s*Not installed/.test(menu) && /Sequentia Core on this computer\s*Ready/.test(menu), 'the chooser lists both wallets: ' + menu.replace(/\s+/g, ' '));
   await a.shot('01-chooser.png');
   await a.eval("document.querySelector('[data-connector=local]').click()");
   await A.answer('A site asks to connect', [new RegExp('from ' + ORIGIN.replace(/[.:/]/g, '\\$&')), /It will see: ert1q/], true);
   await until('alice connected', async () => (await a.eval("document.getElementById('btnConnect').textContent")).startsWith('Connected'), 30_000);
   ok(true, 'alice connected: ' + await a.eval("document.getElementById('btnConnect').title"));
-  await until('alice balances', async () => /XTEST\s*100/.test(await a.eval("document.getElementById('balances').innerText")), 30_000);
-  ok(true, 'alice sees her balances: ' + (await a.eval("document.getElementById('balances').innerText")).replace(/\s+/g, ' '));
+  await a.eval("document.getElementById('side-sell').click()");
+  await until('alice balances', async () => /100\s*XTEST/.test(await a.eval("document.getElementById('fBal').innerText")), 30_000);
+  ok(true, 'alice sees her balance: ' + (await a.eval("document.getElementById('fBal').innerText")).replace(/\s+/g, ' '));
   await a.shot('02-alice-connected.png');
 
   await a.eval("document.getElementById('type-limit').click()");
-  await a.eval("document.getElementById('side-sell').click()");
-  await a.eval("(() => { const s = (id, v) => { const i = document.getElementById(id); i.value = v; i.dispatchEvent(new Event('input')); }; s('fAmount', '10'); s('fPrice', '2'); })()");
+  // The options the daemon lists: post only, a smallest fill of 1 XTEST, taken back after an hour.
+  // The site sends the order in the market's canonical direction (the wallets' rule: two
+  // unranked assets order by id, which differs per run), so the terminal words it either way.
+  ok(await a.eval("['optPostOnly', 'optNoRest', 'optMinFill', 'optTakeBack'].every((id) => !!document.getElementById(id))"), 'the ticket offers the four limit options the daemon lists');
+  await a.eval(`(() => { const s = (id, v) => { const i = document.getElementById(id); i.value = v; i.dispatchEvent(new Event('input')); }; s('fPrice', '2'); s('fPay', '10');
+    document.getElementById('optPostOnly').click(); s('optMinFill', '1'); const t = document.getElementById('optTakeBack'); t.value = '3600'; t.dispatchEvent(new Event('change')); return true })()`);
   await a.eval("document.getElementById('fGo').click()");
-  await A.answer('A site asks to trade', [/Sell 10 XTEST at 2 YUSD each, or better/, /Takes nothing on the book now/, /Rests on the book: sells 10 XTEST for 20 YUSD/], true);
+  await A.answer('A site asks to trade', [/Sell 10 XTEST at 2 YUSD each, or better|Buy 20 YUSD at 0\.5 XTEST each, or better/, /Takes nothing on the book now/, /Rests on the book: sells 10 XTEST for 20 YUSD/, /smallest fill 1 XTEST/, /taken back after 1 hour\b/], true);
   const placed = await until('the limit order placed', async () => { const t = await a.eval("document.getElementById('fStatus').textContent"); return /on the book|not placed|rejected|refus/i.test(t) ? t : null; }, 120_000);
   ok(/Your order is on the book/.test(placed), 'alice: ' + placed);
   await c.mine(1);
@@ -203,8 +212,10 @@ async function main() {
     return (j.offers || []).find((o) => o.covenant && o.offer_asset === X) || null;
   }, 90_000, 2000);
   ok(listed && listed.offer_amount === '1000000000', `the relay lists alice's order: ${listed.offer_id} sells ${listed.offer_amount} at ${listed.covenant.covenant_txid}:${listed.covenant.covenant_vout}`);
-  await until('alice sees the open order', async () => /Sell 10 XTEST/.test(await a.eval("document.getElementById('openOrders').innerText")), 60_000, 2000);
-  ok(true, 'alice under Open: ' + (await a.eval("document.getElementById('openOrders').innerText")).replace(/\s+/g, ' '));
+  ok(String(listed.covenant.min_lot) === '100000000', `its covenant's smallest fill is 1 XTEST (${listed.covenant.min_lot})`);
+  const ordersText = async (p, tab) => { await p.eval(`document.querySelector('#ordTabs button[data-o="${tab}"]').click()`); await sleep(800); return (await p.eval("document.getElementById('ordersBox').innerText")).replace(/\s+/g, ' '); };
+  await until('alice sees the open order', async () => /Sell[\s\S]*10 XTEST|Buy[\s\S]*20 YUSD/.test(await ordersText(a, 'open')), 60_000, 2000);
+  ok(true, 'alice under Open orders: ' + await ordersText(a, 'open'));
   await a.shot('03-alice-order-open.png');
 
   // ---- Bob: connect, see the ask, refuse one buy, approve the next ----
@@ -215,16 +226,24 @@ async function main() {
   await b.eval("document.querySelector('[data-connector=local]').click()");
   await B.answer('A site asks to connect', [/It will see: ert1q/], true);
   await until('bob connected', async () => (await b.eval("document.getElementById('btnConnect').textContent")).startsWith('Connected'), 30_000);
-  await until('the ask in bob\'s book', async () => /\$4\.00|2\b/.test(await b.eval("document.getElementById('bookBody').innerText")), 60_000, 2000);
-  ok(true, 'bob\'s book: ' + (await b.eval("document.getElementById('bookBody').innerText")).replace(/\s+/g, ' '));
+  await until('the ask in bob\'s book', async () => /\$4\.00|2\b/.test(await b.eval("document.getElementById('asks').innerText")), 60_000, 2000);
+  ok(true, 'bob\'s asks: ' + (await b.eval("document.getElementById('asks').innerText")).replace(/\s+/g, ' '));
   const before = await bal('bob');
 
+  // A post-only buy at alice's price would take her order: refused before any question.
   await b.eval("document.getElementById('side-buy').click()");
-  await b.eval("(() => { const i = document.getElementById('fAmount'); i.value = '4'; i.dispatchEvent(new Event('input')); })()");
+  await b.eval("document.getElementById('type-limit').click()");
+  await b.eval(`(() => { const s = (id, v) => { const i = document.getElementById(id); i.value = v; i.dispatchEvent(new Event('input')); }; s('fPrice', '2'); s('fReceive', '4'); document.getElementById('optPostOnly').click(); return true })()`);
   await b.eval("document.getElementById('fGo').click()");
-  await B.answer('A site asks to trade', [/Buy 4 XTEST at the market/, /You give: 8 YUSD/, /You get:  4 XTEST/, /Fees:\s+0\.0000\d+ YUSD/], false);
-  const refused = await until('the refusal on bob\'s page', async () => { const t = await b.eval("document.getElementById('fStatus').textContent"); return /rejected/.test(t) ? t : null; }, 30_000);
-  ok(refused === 'the user rejected the request', 'refused in the terminal, the page says: ' + refused);
+  const po = await until('the post-only refusal', async () => { const t = await b.eval("document.getElementById('fStatus').textContent"); return /would trade/.test(t) ? t : null; }, 60_000);
+  ok(/this order would trade at once; nothing was placed/.test(po) && B.asked() === 0, 'a post-only buy that would trade is refused with no question in the terminal: ' + po);
+
+  await b.eval("document.getElementById('type-market').click()");
+  await b.eval("(() => { const i = document.getElementById('fReceive'); i.value = '4'; i.dispatchEvent(new Event('input')); })()");
+  await b.eval("document.getElementById('fGo').click()");
+  await B.answer('A site asks to trade', [/Buy 4 XTEST at the market|Sell 8 YUSD at the market/, /You give: 8 YUSD/, /You get:  4 XTEST/, /Fees:\s+0\.0000\d+ YUSD/], false);
+  const refused = await until('the refusal on bob\'s page', async () => { const t = await b.eval("document.getElementById('fStatus').textContent"); return /declined/.test(t) ? t : null; }, 30_000);
+  ok(refused === 'You declined in the wallet. Nothing was traded.', 'refused in the terminal, the page says: ' + refused);
   const mp = await c.call('getrawmempool');
   const after0 = await bal('bob');
   ok(mp.length === 0 && after0.X === before.X && after0.Y === before.Y, `nothing moved for the refusal (mempool ${mp.length}, bob ${JSON.stringify(after0)})`);
@@ -232,7 +251,7 @@ async function main() {
   ok((still.offers || []).some((o) => o.offer_id === listed.offer_id), 'alice\'s order is still on the book');
 
   await b.eval("document.getElementById('fGo').click()");
-  await B.answer('A site asks to trade', [/Buy 4 XTEST at the market/, /You give: 8 YUSD/], true);
+  await B.answer('A site asks to trade', [/Buy 4 XTEST at the market|Sell 8 YUSD at the market/, /You give: 8 YUSD/], true);
   const filled = await until('bob\'s fill', async () => { const t = await b.eval("document.getElementById('fStatus').textContent"); return /Traded|could not|taken by someone|nothing/i.test(t) ? t : null; }, 300_000);
   ok(/Traded with 1 order/.test(filled), 'bob: ' + filled);
   await b.shot('04-bob-filled.png');
@@ -254,11 +273,11 @@ async function main() {
   ok(Math.abs(aliceBal.Y - 18) < 0.01, `alice's wallet counts her 8 YUSD credit (${aliceBal.Y} YUSD)`);
 
   await c.bury(3);
-  await until('alice sees the fill', async () => /Filled 4 of 10 XTEST/.test(await a.eval("document.getElementById('openOrders').innerText")), 120_000, 3000);
-  ok(true, 'alice under Open: ' + (await a.eval("document.getElementById('openOrders').innerText")).replace(/\s+/g, ' '));
-  await until('bob\'s history settled', async () => /Bought 4 XTEST for 8 YUSD[\s\S]*Settled/.test(await b.eval("document.getElementById('history').innerText")), 120_000, 3000).catch(() => null);
-  const hist = (await b.eval("document.getElementById('history').innerText")).replace(/\s+/g, ' ');
-  ok(/Bought 4 XTEST for 8 YUSD/.test(hist), 'bob\'s history: ' + hist);
+  await until('alice sees the fill', async () => /\b40%/.test(await ordersText(a, 'open')), 120_000, 3000);
+  ok(true, 'alice under Open orders: ' + await ordersText(a, 'open'));
+  await until('bob\'s trade settled', async () => /Swapped 8 YUSD for 4 XTEST[\s\S]*Settled/.test(await ordersText(b, 'trades')), 120_000, 3000).catch(() => null);
+  const hist = await ordersText(b, 'trades');
+  ok(/Swapped 8 YUSD for 4 XTEST/.test(hist), 'bob\'s trades: ' + hist);
   await a.shot('05-alice-filled.png');
   await b.shot('06-bob-history.png');
 
