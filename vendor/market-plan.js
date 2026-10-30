@@ -193,6 +193,38 @@ export function planTrade({ offers, base, quote, side, amount, price = null, bas
   return { side, receive, pay, slices, got, gave, baseDone, baseLeft: want - baseDone };
 }
 
+// The worst price an approved plan pays, in quote atoms per whole base unit: a purchase's
+// highest, a sale's lowest. A trade that falls through to other orders never goes past it.
+export function worstPrice(plan, side, basePrecision) {
+  const unit = 10n ** BigInt(basePrecision);
+  let w = null;
+  for (const s of plan.slices) {
+    const f = big(s.filled), p = big(s.pays);
+    if (f <= 0n || p <= 0n) continue;
+    // Buying: quote paid per base received, rounded up; selling: quote received per base paid, down.
+    const x = side === 'buy' ? (p * unit + f - 1n) / f : (f * unit) / p;
+    if (w == null || (side === 'buy' ? x > w : x < w)) w = x;
+  }
+  return w;
+}
+
+// What replaces orders that failed when taken (their maker did not answer, someone took them
+// first): a plan over the orders not yet tried, for the base the failed ones left, at `price`
+// or better, giving no more than `budget` of what is paid and taking at most `maxSlices`
+// orders, so the trade stays inside what was approved.
+export function fallThrough({ offers, tried, base, quote, side, amount, price, basePrecision, nowSec, budget, maxSlices }) {
+  const left = (offers || []).filter((o) => !tried.has(o.offer_id));
+  if (big(amount) <= 0n || maxSlices <= 0 || !left.length) return { slices: [], gave: 0n, got: 0n, baseDone: 0n };
+  const p = planTrade({ offers: left, base, quote, side, amount, price, basePrecision, nowSec });
+  const slices = [];
+  let gave = 0n, got = 0n;
+  for (const s of p.slices) {
+    if (slices.length >= maxSlices || gave + s.pays > big(budget)) break;
+    slices.push(s); gave += s.pays; got += s.filled;
+  }
+  return { slices, gave, got, baseDone: side === 'buy' ? got : gave };
+}
+
 // The order that rests with what a limit order did not fill: the wallet sells what it
 // pays, at the limit price exactly. Buying, it sells the quote for the base still
 // wanted; selling, it sells the base still offered. The rate comes from the price, so

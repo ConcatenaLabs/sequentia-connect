@@ -40,6 +40,9 @@ by the daemon itself; the plan of a trade is the same arithmetic the extension u
 (`vendor/market-plan.js`). Each order taken is one transaction that pays its maker
 and you together, or nothing: SeqDEX's taker (`seqob-cli covfill`) builds it,
 checks the order against the chain, and has your Core wallet sign its own inputs.
+Only the orders SeqDEX's book lists are taken, and one that cannot be taken (someone
+took it first) is replaced by the next listed order at the prices you approved or
+better, for no more than you approved.
 The taker reaches your node through a one-use door the daemon opens on the loopback
 address, with a random password and only the methods a fill needs, so your node's
 real credentials never appear on a command line. What a limit order does not fill

@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { planTrade, restTerms, orderProgress, readOrderOptions, withMinFill, MAX_ORDERS_PER_TRADE } from '../vendor/market-plan.js';
+import { planTrade, restTerms, orderProgress, readOrderOptions, withMinFill, worstPrice, fallThrough, MAX_ORDERS_PER_TRADE } from '../vendor/market-plan.js';
 import { planPlaceOrder, postExisting } from '../vendor/covenant-order.js';
 import { orderExpiryTime, lockState } from '../vendor/covenant-flow.js';
 import { secp256k1, schnorr } from '../vendor/btc.js';
@@ -273,6 +273,33 @@ export function market({ core, relay, seqobCli, datadir, meta, log = () => {} })
           filled++; gave += s.pays; got += s.filled;
           trade.fills.push({ txid, base: (p.side === 'buy' ? s.filled : s.pays).toString(), quote: (p.side === 'buy' ? s.pays : s.filled).toString() });
         } catch (e) { failed.push({ offer: s.offerId, error: e.message }); }
+      }
+      // An order that could not be taken leaves its part to the next orders the book lists, at
+      // the worst approved price or better (a limit order's own price), for no more than the
+      // approval gave for it and in no more orders than it showed (vendor/market-plan.js).
+      const taken = p.plan.slices.slice(0, MAX_ORDERS_PER_TRADE);
+      const failedSlices = taken.filter((s) => failed.some((f) => f.offer === s.offerId));
+      let left = failedSlices.reduce((a, s) => a + (p.side === 'buy' ? s.filled : s.pays), 0n);
+      if (left > 0n) {
+        const tried = new Set(taken.map((s) => s.offerId));
+        const unit = 10n ** BigInt(await meta.precision(p.base));
+        let budget = p.type === 'limit' && p.side === 'buy' ? (left * p.price + unit - 1n) / unit : failedSlices.reduce((a, s) => a + s.pays, 0n);
+        let room = taken.length - filled;
+        const bound = p.type === 'limit' ? p.price : worstPrice(p.plan, p.side, await meta.precision(p.base));
+        for (let pass = 0; pass < 2 && left > 0n && room > 0 && budget > 0n && bound != null; pass++) {
+          const fp = fallThrough({ offers: await offersOf(p.base, p.quote), tried, base: p.base, quote: p.quote, side: p.side, amount: left, price: bound,
+            basePrecision: await meta.precision(p.base), nowSec: Math.floor(Date.now() / 1000), budget, maxSlices: room });
+          if (!fp.slices.length) break;
+          for (const s of fp.slices) {
+            tried.add(s.offerId);
+            try {
+              const txid = await fillOne(s, p.payAsset, p.fillFee, p.base, p.quote);
+              filled++; gave += s.pays; got += s.filled; room--; budget -= s.pays;
+              left -= p.side === 'buy' ? s.filled : s.pays;
+              trade.fills.push({ txid, base: (p.side === 'buy' ? s.filled : s.pays).toString(), quote: (p.side === 'buy' ? s.pays : s.filled).toString() });
+            } catch (e) { failed.push({ offer: s.offerId, error: e.message }); }
+          }
+        }
       }
       let order = null, orderError = null;
       if (p.rest) {
