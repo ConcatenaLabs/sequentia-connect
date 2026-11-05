@@ -1,0 +1,26 @@
+# The unit tests on every pull request and on main. Sequentia Connect runs on its users' machines,
+# so it is tested on the oldest Node its package.json accepts (20) and on 22.
+#
+# Not run here, by design (CLAUDE.md):
+# - SKIPPED (needs a regtest stack and a browser): test/regtest/site-drive.mjs.
+# - SKIPPED (needs SeqLN nodes): test/seqln/test_connect_lightning.py.
+name: tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  node-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
