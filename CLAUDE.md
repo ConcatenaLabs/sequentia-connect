@@ -25,7 +25,8 @@ model; read it first.
 
 ## Tests
 
-`node --test test/*.test.mjs` (doors, approvals, amounts). `test/regtest/site-drive.mjs` and
+`node --test test/*.test.mjs` (doors, approvals, amounts); CI runs them on every pull request and
+on `main`, on Node 20 and 22. `test/regtest/site-drive.mjs` and
 `test/seqln/test_connect_lightning.py` run against real parts; their headers say how.
 
 <!-- BEGIN SHARED AGENT CONVENTIONS: identical in every Sequentia repo. Change it in all of them together. -->
